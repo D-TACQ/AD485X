@@ -27,6 +27,9 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 
+#include <linux/module.h>
+#include <linux/moduleparam.h>
+
 #include "cf_axi_adc.h"
 
 #define AD485x_REG_INTERFACE_CONFIG_A	0x00
@@ -807,7 +810,6 @@ static ssize_t ad485x_device_status_read(struct device *dev,
 
 static DEVICE_ATTR(device_status, 0444, ad485x_device_status_read, NULL);
 
-#define MARK(adc, ret) dev_dbg(&adc->spi->dev, "%s %d ret %d", __FUNCTION__, __LINE__, ret)
 
 static int ad485x_setup(struct ad485x_dev *adc)
 {
@@ -821,35 +823,33 @@ static int ad485x_setup(struct ad485x_dev *adc)
 	};
 	unsigned int product_id;
 	int ret;
-	int retry;
 
 	ret = ad485x_set_sampling_freq(adc, 1000000);
-	MARK(adc, ret);
+
 	if (ret < 0)
 		return ret;
 
 	ret = ad485x_spi_reg_write(adc, AD485x_REG_INTERFACE_CONFIG_A,
 				   AD485x_SW_RESET);
-	MARK(adc, ret);
+
 	if (ret < 0)
 		return ret;
 
 	usleep_range(5000, 10000);
 	ret = ad485x_spi_reg_write(adc, AD485x_REG_INTERFACE_CONFIG_B,
 				   AD485x_SINGLE_INSTRUCTION);
-	MARK(adc, ret);
+
 	if (ret < 0)
 		return ret;
 
 	ret = ad485x_spi_reg_write(adc, AD485x_REG_INTERFACE_CONFIG_A,
 				   AD485x_SDO_ENABLE);
-	MARK(adc, ret);
+
 	if (ret < 0)
 		return ret;
 
-	for (retry = 0; retry < 4; ++retry){
-	ret = ad485x_spi_reg_read(adc, AD485x_REG_PRODUCT_ID_L+(retry? retry-2:0), &product_id);
-	MARK(adc, ret);
+	ret = ad485x_spi_reg_read(adc, AD485x_REG_PRODUCT_ID_L, &product_id);
+
 	if (ret < 0)
 		return ret;
 
@@ -882,23 +882,17 @@ static int ad485x_setup(struct ad485x_dev *adc)
 		adc->type = ID_AD4858I;
 		break;
 	default:
-		MARK(adc, -EIO);
 		dev_err(&adc->spi->dev, "Unknown product ID: 0x%02X\n",
 			product_id);
-		if (retry+1 == 4){
-			return -EIO;
-		}
-	}
+		return -EIO;
 	}
 
 	ret = ad485x_spi_reg_write(adc, AD485x_REG_DEVICE_CTRL,
 				   AD485x_ECHO_CLOCK_MODE);
-	MARK(adc, ret);
 	if (ret < 0)
 		return ret;
 
 	ret = ad485x_spi_reg_write(adc, AD485x_REG_PACKET, 0);
-	MARK(adc, ret);
 	if (ret < 0)
 		return ret;
 
@@ -907,7 +901,6 @@ static int ad485x_setup(struct ad485x_dev *adc)
 	tx_data[2] = 0x0;
 
 	/* Do a dummy spi transfer and change the cs low after */
-	MARK(adc, ret);
 	return spi_sync_transfer(adc->spi, &xfer, 1);
 }
 
@@ -1009,6 +1002,7 @@ static int ad485x_reg_access(struct iio_dev *indio_dev,
 	return ad485x_spi_reg_write(adc, reg, writeval);
 }
 
+#ifdef PGMCOMOUT
 static void ad485x_regulator_disable(void *data)
 {
 	regulator_disable(data);
@@ -1016,15 +1010,15 @@ static void ad485x_regulator_disable(void *data)
 
 static void ad485x_clk_disable(void *data)
 {
-#ifdef PGMCOMOUT	
-	clk_disable_unprepare(data);
-#endif
-}
 
-static void ad485x_pwm_diasble(void *data)
+	clk_disable_unprepare(data);
+
+}
+static void ad485x_pwm_disable(void *data)
 {
 	pwm_disable(data);
 }
+#endif
 
 int find_opt(u8 *field, u32 size, u32 *ret_start)
 {
@@ -1363,31 +1357,99 @@ static const struct axiadc_chip_info adc_chip_info[] = {
 	},
 };
 
+#include <linux/debugfs.h>
+
+#ifdef SOLODEBUGFS
+static struct dentry* debugfs_root;
+
+struct my_device {
+	struct dentry *debugfs_dir;
+	struct dentry *reg_file;
+	struct ad485x_dev *adc;
+	char lbuf[80];
+	// Other device data...
+};
+
+static int reg_open(struct inode *inode, struct file *file)
+{
+	file->private_data = inode->i_private;
+	return 0;
+}
+
+static ssize_t reg_read(struct file *file, char __user *user_buf,
+                        size_t count, loff_t *ppos)
+{
+	struct my_device *dev = file->private_data;
+	char buf[32];
+	unsigned int reg, val;
+	int rc;
+
+	if (sscanf(user_buf, "%x", &reg) != 1)
+		return -EINVAL;
+
+	rc = ad485x_spi_reg_read(dev->adc, reg, &val);
+
+	if (rc != 0){
+		return rc;
+	}
+	snprintf(buf, sizeof(buf), "0x%x: 0x%x\n", reg, val);
+	return simple_read_from_buffer(user_buf, count, ppos, buf, strlen(buf));
+}
+
+static ssize_t reg_write(struct file *file, const char __user *user_buf,
+                         size_t count, loff_t *ppos)
+{
+	struct my_device *dev = file->private_data;
+	unsigned int reg, val;
+	int rc;
+
+	if (sscanf(user_buf, "%x %x", &reg, &val) != 2)
+		return -EINVAL;
+
+	rc = ad485x_spi_reg_write(dev->adc, reg, val);
+
+	if (rc < 0){
+		return rc;
+	}
+	return count;
+}
+
+static const struct file_operations dbg_reg_fops = {
+	.open = reg_open,
+	.read = reg_read,
+	.write = reg_write,
+};
+#endif
+
+static const struct iio_info ad485x_info = {
+	.read_raw = ad485x_read_raw,
+	.write_raw = ad485x_write_raw,
+	.debugfs_reg_access = ad485x_reg_access
+};
+
 static int ad485x_probe(struct spi_device *spi)
 {
 	struct axiadc_converter	*conv;
 	struct iio_dev *indio_dev;
 	struct ad485x_dev *adc;
+#ifdef SOLODEBUGFS
+	struct my_device* my_dev;
+	char devname[32];
+#endif
 	int ret;
 
-	printk("%s %d", __FUNCTION__, __LINE__);
 	conv = devm_kzalloc(&spi->dev, sizeof(*conv), GFP_KERNEL);
 	if (!conv)
 		return -ENOMEM;
 
-	printk("%s %d", __FUNCTION__, __LINE__);
 	indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*adc));
 	if (!indio_dev)
 		return -ENOMEM;
 
-	printk("%s %d", __FUNCTION__, __LINE__);
 	adc = iio_priv(indio_dev);
 	spi_set_drvdata(spi, conv);
 	adc->spi = spi;
 
-	printk("%s %d", __FUNCTION__, __LINE__);
-	MARK(adc, 0);
-	printk("%s %d", __FUNCTION__, __LINE__);
 #ifdef PGMCOMOUT	
 	adc->refin = devm_regulator_get(&spi->dev, "refin");
 	printk("%s %d", __FUNCTION__, __LINE__);
@@ -1405,7 +1467,6 @@ static int ad485x_probe(struct spi_device *spi)
 		ret = devm_add_action_or_reset(&spi->dev,
 					       ad485x_regulator_disable,
 					       adc->refin);
-		MARK(adc,ret);
 		if (ret)
 			return ret;
 	} else {
@@ -1416,7 +1477,6 @@ static int ad485x_probe(struct spi_device *spi)
 		adc->vref_mv = AD485x_INT_REF_VOLTAGE_MV;
 	}
 #endif
-	MARK(adc, 0);
 #ifdef PGMCOUT
 	adc->sampl_clk = devm_clk_get(&spi->dev, "scki");
 	if (IS_ERR(adc->sampl_clk))
@@ -1428,7 +1488,6 @@ static int ad485x_probe(struct spi_device *spi)
 
 	ret = devm_add_action_or_reset(&spi->dev, ad485x_clk_disable,
 				       adc->sampl_clk);
-	MARK(adc, ret);
 	if (ret)
 		return ret;
 #endif	
@@ -1439,7 +1498,6 @@ static int ad485x_probe(struct spi_device *spi)
 
 	ret = devm_add_action_or_reset(&spi->dev, ad485x_pwm_diasble,
 				       adc->cnv);
-	MARK(adc,ret);
 	if (ret)
 		return ret;
 #endif
@@ -1458,12 +1516,49 @@ static int ad485x_probe(struct spi_device *spi)
 	conv->read_label = &ad485x_read_label;
 	conv->phy = adc;
 
+	indio_dev->name = spi->dev.driver->name;
+	indio_dev->info = &ad485x_info;
+
+	indio_dev->channels = adc_chip_info[adc->type].channel;
+	indio_dev->num_channels = adc_chip_info[adc->type].num_channels;
+	indio_dev->modes = INDIO_DIRECT_MODE;
+
+	ret = iio_device_register(indio_dev);
+	if (ret)
+		return -ENOMEM;
+
 	device_create_file(&spi->dev, &dev_attr_spi_status);
 	device_create_file(&spi->dev, &dev_attr_device_status);
 
+#ifdef SOLODEBUGFS
+	my_dev = devm_kzalloc(&spi->dev, sizeof(*my_dev), GFP_KERNEL);
+	if (!my_dev){
+		return -ENOMEM;
+	}
+	my_dev->adc = adc;
+	if (!debugfs_root){
+		debugfs_root = debugfs_create_dir("ad485x", NULL);
+	}
+	snprintf(devname, 32, "%d", spi->chip_select);
+	my_dev->debugfs_dir = debugfs_create_dir(devname, debugfs_root);
+	if (!my_dev->debugfs_dir){
+		return -ENOMEM;
+	}
+	my_dev->reg_file = debugfs_create_file(
+			"regs", 0644, my_dev->debugfs_dir, my_dev, &dbg_reg_fops);
+	if (!my_dev->reg_file){
+		debugfs_remove_recursive(my_dev->debugfs_dir);
+		return -ENOMEM;
+	}
+#endif
 	return 0;
 }
 
+int ad485x_remove(struct spi_device *spi)
+{
+	dev_info(&spi->dev, "%s", __FUNCTION__);
+	return 0;
+}
 static const struct of_device_id ad485x_of_match[] = {
 	{ .compatible = "adi,ad4858" },
 	{ .compatible = "adi,ad4857" },
@@ -1479,6 +1574,7 @@ static const struct of_device_id ad485x_of_match[] = {
 
 static struct spi_driver ad485x_driver = {
 	.probe = ad485x_probe,
+	.remove= ad485x_remove,
 	.driver = {
 		.name   = "ad485x",
 		.of_match_table = ad485x_of_match,
