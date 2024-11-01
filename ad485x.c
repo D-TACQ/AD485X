@@ -195,6 +195,8 @@ static int ad485x_spi_reg_write(struct ad485x_dev *adc, unsigned int addr,
 		.bits_per_word = 8,
 	};
 
+	dev_dbg(&adc->spi->dev, "%s adc %p", __FUNCTION__, adc);
+
 	tx_data[0] = ((addr >> 8) & 0xFF);
 	tx_data[1] = addr & 0xFF;
 	tx_data[2] = val;
@@ -213,7 +215,7 @@ static int ad485x_spi_reg_read(struct ad485x_dev *adc, unsigned int addr,
 		.bits_per_word = 8,
 	};
 
-	dev_dbg(0, "%s adc %p", __FUNCTION__, adc);
+	dev_dbg(&adc->spi->dev, "%s adc %p", __FUNCTION__, adc);
 
 	tx_data[0] = ((addr >> 8) & 0xFF) | BIT(7);
 	tx_data[1] = addr & 0xFF;
@@ -1361,7 +1363,7 @@ static const struct axiadc_chip_info adc_chip_info[] = {
 
 #include <linux/debugfs.h>
 
-
+#define ACQ426_BC_CS 0x0f
 
 static const struct iio_info ad485x_info = {
 	.read_raw = ad485x_read_raw,
@@ -1374,6 +1376,7 @@ static int ad485x_probe(struct spi_device *spi)
 	struct axiadc_converter	*conv;
 	struct iio_dev *indio_dev;
 	struct ad485x_dev *adc;
+	u8 chip_select = spi->chip_select;
 	int ret;
 
 	conv = devm_kzalloc(&spi->dev, sizeof(*conv), GFP_KERNEL);
@@ -1387,6 +1390,11 @@ static int ad485x_probe(struct spi_device *spi)
 	adc = iio_priv(indio_dev);
 	spi_set_drvdata(spi, conv);
 	adc->spi = spi;
+
+	if ((spi->chip_select&ACQ426_BC_CS) == ACQ426_BC_CS){
+		dev_info(&spi->dev, "%s stub BC CS for probe", __FUNCTION__);
+		spi->chip_select &= ~ACQ426_BC_CS;		/* don't probe on BC */
+	}
 
 #ifdef PGMCOMOUT	
 	adc->refin = devm_regulator_get(&spi->dev, "refin");
@@ -1443,6 +1451,7 @@ static int ad485x_probe(struct spi_device *spi)
 	if (ret < 0)
 		return ret;
 
+	spi->chip_select = chip_select;     /* restore original, possible BC cs */
 	conv->spi = spi;
 	conv->clk = adc->sampl_clk;
 	conv->chip_info = &adc_chip_info[adc->type];
