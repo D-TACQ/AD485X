@@ -1,0 +1,46 @@
+[  119.610322] acq420 40000000.acq2006sc: acq400_set_peripheral_SPI_CS() 00000007
+[  119.617881] acq420 40000000.acq2006sc: acq400_set_peripheral_SPI_CS() 00000001
+[  119.626185] (NULL device *): ad485x_probe adc: ec6212c0
+[  138.725877] (NULL device *): ad485x_spi_reg_read adc   (null)
+[  138.731278] Unable to handle kernel NULL pointer dereference at virtual address 0000000c
+[  138.745296] pgd = ec15c000
+[  138.748037] [0000000c] *pgd=00000000
+[  138.751705] Internal error: Oops - BUG: 5 [#1] PREEMPT SMP ARM
+
+cq1001_074> ./debugs 
+acq1001_074> /usr/local/CARE/load.overlay acq400_ad4858_overlay_cs1
+loading overlay acq400_ad4858_overlay_cs1.dtb acq400_ad4858_overlay_cs1 ...
+acq1001_074> /sbin/insmod ad485xx.ko dyndbg=+p
+acq1001_074> echo 0xA > /sys/kernel/debug/iio/iio\:device1/direct_reg_access
+acq1001_074> cat /sys/kernel/debug/iio/iio\:device1/direct_reg_access
+Segmentation fault
+
+
+
+Zero. Zero WTF?
+
+
+OK, conv it is, it's a winner
+
+
+acq1001_074> ./goforit 
+loading overlay acq400_ad4858_overlay_cs1.dtb acq400_ad4858_overlay_cs1 ...
+0xB6 0x1
+0xB7 0x2
+0xB8 0x4
+0xB9 0x8
+0x3 0x7
+0x4 0x60
+0x5 0x0
+0x6 0x0
+0xA 0x0
+0xB 0x83
+0xC 0x56
+0xD 0x4
+0xac 0x0
+0xB6 0x1
+0xB7 0x2
+0xB8 0x4
+0xB9 0x8
+
+

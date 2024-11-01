@@ -213,6 +213,8 @@ static int ad485x_spi_reg_read(struct ad485x_dev *adc, unsigned int addr,
 		.bits_per_word = 8,
 	};
 
+	dev_dbg(0, "%s adc %p", __FUNCTION__, adc);
+
 	tx_data[0] = ((addr >> 8) & 0xFF) | BIT(7);
 	tx_data[1] = addr & 0xFF;
 	tx_data[2] = 0;
@@ -1516,6 +1518,8 @@ static int ad485x_probe(struct spi_device *spi)
 	conv->read_label = &ad485x_read_label;
 	conv->phy = adc;
 
+	dev_dbg(0, "%s adc: %p", __FUNCTION__, adc);
+	iio_device_set_drvdata(indio_dev, conv);
 	indio_dev->name = spi->dev.driver->name;
 	indio_dev->info = &ad485x_info;
 

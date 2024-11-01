@@ -1,0 +1,7 @@
+cd /mnt/local
+/usr/local/CARE/load.overlay acq400_ad4858_overlay_cs1
+/sbin/insmod ad485xx.ko
+./write_test_pat
+./dump_regs
+
+
