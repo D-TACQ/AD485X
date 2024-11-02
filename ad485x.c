@@ -766,7 +766,7 @@ static ssize_t ad485x_spi_status_read(struct device *dev,
 		"\tNOT_READY_ERR: %d\n",
 		test_bit(AD485x_STATUS_NOT_READY, &val));
 
-	buf[len - 1] = '\n';
+//	buf[len - 1] = '\n';
 
 	return len;
 }
@@ -807,13 +807,25 @@ static ssize_t ad485x_device_status_read(struct device *dev,
 	len += scnprintf(buf + len, PAGE_SIZE - len, "\tREADY: %d\n",
 			 test_bit(AD485x_STATUS_READY, &val));
 
-	buf[len - 1] = '\n';
+//	buf[len - 1] = '\n';
 
 	return len;
 }
 
 static DEVICE_ATTR(device_status, 0444, ad485x_device_status_read, NULL);
 
+static ssize_t ad485x_iio_id(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
+{
+	struct axiadc_converter *conv = dev_get_drvdata(dev);
+	struct iio_dev 	*indio_dev = conv->indio_dev;
+	ssize_t len = 0;
+
+	len += scnprintf(buf+len, PAGE_SIZE-len, "%d\n", indio_dev->id);
+	return len;
+}
+static DEVICE_ATTR(iio_id, 0444, ad485x_iio_id, NULL);
 
 static int ad485x_setup(struct ad485x_dev *adc)
 {
@@ -1371,6 +1383,8 @@ static const struct iio_info ad485x_info = {
 	.debugfs_reg_access = ad485x_reg_access
 };
 
+static int bc_cs_site = 0;
+
 static int ad485x_probe(struct spi_device *spi)
 {
 	struct axiadc_converter	*conv;
@@ -1392,8 +1406,14 @@ static int ad485x_probe(struct spi_device *spi)
 	adc->spi = spi;
 
 	if ((spi->chip_select&ACQ426_BC_CS) == ACQ426_BC_CS){
-		dev_info(&spi->dev, "%s stub BC CS for probe", __FUNCTION__);
-		spi->chip_select &= ~ACQ426_BC_CS;		/* don't probe on BC */
+		if (bc_cs_site==0){
+			dev_info(&spi->dev, "%s stub BC CS for probe", __FUNCTION__);
+			spi->chip_select &= ~ACQ426_BC_CS;		/* don't probe on BC */
+			bc_cs_site = 1;					/* not sure what site .. */
+		}else{
+			dev_info(&spi->dev, "%s redundant BC CS not required", __FUNCTION__);
+			return -EACCES;
+		}
 	}
 
 #ifdef PGMCOMOUT	
@@ -1475,10 +1495,11 @@ static int ad485x_probe(struct spi_device *spi)
 	ret = iio_device_register(indio_dev);
 	if (ret)
 		return -ENOMEM;
+	conv->indio_dev = indio_dev;
 
 	device_create_file(&spi->dev, &dev_attr_spi_status);
 	device_create_file(&spi->dev, &dev_attr_device_status);
-
+	device_create_file(&spi->dev, &dev_attr_iio_id);
 
 	return 0;
 }
