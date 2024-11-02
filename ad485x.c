@@ -12,7 +12,7 @@
  * add REGS knob
  * add per channel TP knob.
  */
-#define VER	"0.0.5"
+#define VER	"0.1.0"
 
 
 #include <linux/bitops.h>
@@ -490,8 +490,8 @@ static ssize_t ad485x_read_tp32(struct iio_dev *indio_dev,
 		tp32 = tp32<<8 | reg;
 	}
 
-	dev_info(&conv->spi->dev, "%s chan %d", __FUNCTION__, chan->channel);
-	ret = snprintf(buf, 128, "ad485x_read_tp32 chan %d %08x\n", chan->channel, tp32);
+	dev_dbg(&conv->spi->dev, "%s chan %d %08x", __FUNCTION__, chan->channel, tp32);
+	ret = snprintf(buf, 128, "%08x\n", tp32);
 	return ret;
 }
 ssize_t ad485x_write_tp32(struct iio_dev *indio_dev, uintptr_t private,
@@ -513,7 +513,7 @@ ssize_t ad485x_write_tp32(struct iio_dev *indio_dev, uintptr_t private,
 		return -EINVAL;
 	}
 
-	dev_info(&conv->spi->dev, "%s chan %d tp32:%08x", __FUNCTION__, chan->channel, tp32);
+	dev_dbg(&conv->spi->dev, "%s chan %d tp32:%08x", __FUNCTION__, chan->channel, tp32);
 
 	for (ireg = 4; ireg-- > 0; tp32 >>= 8){
 		int ret = ad485x_spi_reg_write(adc, addrs[ireg], tp32&0xff);
