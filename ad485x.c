@@ -73,6 +73,12 @@
 #define AD485x_REG_CHX_UR(ch)		AD485x_REG_CHX_OR(ch) + 0x04
 #define AD485x_REG_CHX_TESTPAT(ch)	AD485x_REG_CHX_UR(ch) + 0x03
 
+#define AD4851_REG_TESTPAT_0(c)                (0x38 + (c) * 0x12)
+#define AD4851_REG_TESTPAT_1(c)                (0x39 + (c) * 0x12)
+#define AD4851_REG_TESTPAT_2(c)                (0x3A + (c) * 0x12)
+#define AD4851_REG_TESTPAT_3(c)                (0x3B + (c) * 0x12)
+
+
 #define AD485x_MSK_OS_RATIO		GENMASK(0, 3)
 
 #define AD485x_SW_RESET			BIT(7) | BIT(0)
@@ -159,6 +165,10 @@ enum ad485x_type {
 #define ID_AD4851_THROUGHPUT	 250000
 #define ID_AD4858I_THROUGHPUT	 800000
 
+
+
+int do_post = 0;
+module_param(do_post, int, 0644);
 
 struct ad485x_dev {
 	enum ad485x_type	type;
@@ -1071,14 +1081,16 @@ static int ad485x_post_setup(struct iio_dev *indio_dev)
 	struct axiadc_state *st = iio_priv(indio_dev);
 	struct ad485x_dev *adc = conv->phy;
 	u8 pn_status[8][32];
-	int opt_delay, s, c;
+
 	unsigned int lane_num;
-	unsigned int delay;
+
 	unsigned int cmos;
 	unsigned int val;
-	unsigned int i;
-	unsigned int j;
+	unsigned int il;
+	unsigned int cc;
 	int ret;
+
+	dev_info(&indio_dev->dev, "%s 01", __FUNCTION__);
 
 	cmos = (axiadc_read(st, ADI_REG_CONFIG) & ADI_CMOS_OR_LVDS_N) ? 1 : 0;
 	if (cmos)
@@ -1100,38 +1112,39 @@ static int ad485x_post_setup(struct iio_dev *indio_dev)
 	if (ret < 0)
 		return ret;
 
-	for (i = 0; i < conv->chip_info->num_channels; i++) {
-		ad485x_spi_reg_write(adc, 0x38 + i * 0x12, 0x2A);
-		ad485x_spi_reg_write(adc, 0x39 + i * 0x12, 0x3C);
-		ad485x_spi_reg_write(adc, 0x3a + i * 0x12, 0xCE);
-		ad485x_spi_reg_write(adc, 0x3b + i * 0x12, 0x0A + (0x10 * i));
-		axiadc_write(st, ADI_REG_CHAN_CNTRL(i), ADI_ENABLE);
+	for (cc = 0; cc < conv->chip_info->num_channels; cc++) {
+		ad485x_spi_reg_write(adc, AD4851_REG_TESTPAT_0(cc), 0x2A);
+		ad485x_spi_reg_write(adc, AD4851_REG_TESTPAT_1(cc), 0x3C);
+		ad485x_spi_reg_write(adc, AD4851_REG_TESTPAT_2(cc), 0xCE);
+		ad485x_spi_reg_write(adc, AD4851_REG_TESTPAT_3(cc), 0x0A + (0x10 * cc));
+		axiadc_write(st, ADI_REG_CHAN_CNTRL(cc), ADI_ENABLE);
 	}
 
-	for (i = 0; i < lane_num; i++) {
+	for (il = 0; il < lane_num; il++) {
+		unsigned int delay;
 		for (delay = 0; delay < 32; delay++) {
-			val = axiadc_read(st, ADI_REG_CHAN_STATUS(i));
-			axiadc_write(st, ADI_REG_CHAN_STATUS(i), val);
-			axiadc_write(st, 0x800 + (i * 4), delay);
+			val = axiadc_read(st, ADI_REG_CHAN_STATUS(il));
+			axiadc_write(st, ADI_REG_CHAN_STATUS(il), val);
+			axiadc_write(st, 0x800 + (il * 4), delay);
 			mdelay(1);
-			if (axiadc_read(st, ADI_REG_CHAN_STATUS(i)) & ADI_PN_ERR)
-				pn_status[i][delay] = 1;
+			if (axiadc_read(st, ADI_REG_CHAN_STATUS(il)) & ADI_PN_ERR)
+				pn_status[il][delay] = 1;
 			else
-				pn_status[i][delay] = 0;
+				pn_status[il][delay] = 0;
 		}
 	}
 
 	dev_info(&conv->spi->dev, "digital interface tuning:\n");
 
 	pr_cont("  ");
-	for (i = 0; i < 31; i++)
-		pr_cont("%02d:", i);
-	pr_cont("31\n");
+	for (il = 0; il <= 31; il++)
+		pr_cont("%02d%c", il, il==31? '\n': ':');
 
-	for (i = 0; i < lane_num; i++) {
-		pr_info("%x:", i);
+	for (il = 0; il < lane_num; il++) {
+		int j;
+		pr_info("%x:", il);
 		for (j = 0; j < 32; j++) {
-			if (pn_status[i][j])
+			if (pn_status[il][j])
 			    pr_cont(" # ");
 			else
 				pr_cont(" o ");
@@ -1139,22 +1152,24 @@ static int ad485x_post_setup(struct iio_dev *indio_dev)
 		pr_cont("\n");
 	}
 
-	for (i = 0; i < lane_num; i++) {
-		c = find_opt(&pn_status[i][0], 32, &s);
+	for (il = 0; il < lane_num; il++) {
+		int opt_delay, s, c;
+		c = find_opt(&pn_status[il][0], 32, &s);
 		opt_delay = s + c / 2;
-		axiadc_write(st, 0x800 + (i * 4), opt_delay);
+		axiadc_write(st, 0x800 + (il * 4), opt_delay);
 		dev_info(&conv->spi->dev, "lane %d: selected delay: %d\n",
-			i, opt_delay);
+			il, opt_delay);
 	}
 
-	for (i = 0; i < conv->chip_info->num_channels; i++)
-		axiadc_write(st, ADI_REG_CHAN_CNTRL(i), 0);
+	for (cc = 0; cc < conv->chip_info->num_channels; cc++)
+		axiadc_write(st, ADI_REG_CHAN_CNTRL(cc), 0);
 
 	axiadc_write(st, AD485x_AXI_REG_CNTRL_3, 0);
 	ret = ad485x_spi_reg_write(adc, AD485x_REG_PACKET, 0);
 	if (ret < 0)
 		return ret;
 
+	dev_info(&indio_dev->dev, "%s 99", __FUNCTION__);
 	return 0;
 }
 
@@ -1384,6 +1399,9 @@ static const struct iio_info ad485x_info = {
 };
 
 static int bc_cs_site = 0;
+static int first_time = 1;
+
+#define VER	"0.0.1"
 
 static int ad485x_probe(struct spi_device *spi)
 {
@@ -1393,6 +1411,10 @@ static int ad485x_probe(struct spi_device *spi)
 	u8 chip_select = spi->chip_select;
 	int ret;
 
+	if (first_time){
+		dev_info(&spi->dev, "%s %s", __FUNCTION__, VER);
+		first_time = 0;
+	}
 	conv = devm_kzalloc(&spi->dev, sizeof(*conv), GFP_KERNEL);
 	if (!conv)
 		return -ENOMEM;
@@ -1501,6 +1523,9 @@ static int ad485x_probe(struct spi_device *spi)
 	device_create_file(&spi->dev, &dev_attr_device_status);
 	device_create_file(&spi->dev, &dev_attr_iio_id);
 
+	if (do_post){
+		conv->post_setup(indio_dev);
+	}
 	return 0;
 }
 
