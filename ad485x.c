@@ -5,6 +5,16 @@
  * Copyright 2024 Analog Devices Inc.
  */
 
+/* hacked by peter.milne@d-tacq.com
+ * remove ADI AXI dependency.  @todo: check Toni's latest submission to kernel.org.
+ * publish IIO_ID from SPI to enable enumeration.
+ * support a BC CS.
+ * add REGS knob
+ * add per channel TP knob.
+ */
+#define VER	"0.0.5"
+
+
 #include <linux/bitops.h>
 #include <linux/bitfield.h>
 #include <linux/device.h>
@@ -73,10 +83,10 @@
 #define AD485x_REG_CHX_UR(ch)		AD485x_REG_CHX_OR(ch) + 0x04
 #define AD485x_REG_CHX_TESTPAT(ch)	AD485x_REG_CHX_UR(ch) + 0x03
 
-#define AD4851_REG_TESTPAT_0(c)                (0x38 + (c) * 0x12)
-#define AD4851_REG_TESTPAT_1(c)                (0x39 + (c) * 0x12)
-#define AD4851_REG_TESTPAT_2(c)                (0x3A + (c) * 0x12)
-#define AD4851_REG_TESTPAT_3(c)                (0x3B + (c) * 0x12)
+#define AD4851_REG_TESTPAT_0(c0)                (0x38 + (c0) * 0x12)
+#define AD4851_REG_TESTPAT_1(c0)                (0x39 + (c0) * 0x12)
+#define AD4851_REG_TESTPAT_2(c0)                (0x3A + (c0) * 0x12)
+#define AD4851_REG_TESTPAT_3(c0)                (0x3B + (c0) * 0x12)
 
 
 #define AD485x_MSK_OS_RATIO		GENMASK(0, 3)
@@ -166,10 +176,6 @@ enum ad485x_type {
 #define ID_AD4858I_THROUGHPUT	 800000
 
 
-
-int do_post = 0;
-module_param(do_post, int, 0644);
-
 struct ad485x_dev {
 	enum ad485x_type	type;
 	unsigned int		sampling_freq;
@@ -205,12 +211,12 @@ static int ad485x_spi_reg_write(struct ad485x_dev *adc, unsigned int addr,
 		.bits_per_word = 8,
 	};
 
-	dev_dbg(&adc->spi->dev, "%s adc %p", __FUNCTION__, adc);
-
 	tx_data[0] = ((addr >> 8) & 0xFF);
 	tx_data[1] = addr & 0xFF;
 	tx_data[2] = val;
 
+	dev_dbg(&adc->spi->dev, "%s adc %p %02x %02x %02x",
+			__FUNCTION__, adc, tx_data[0], tx_data[1], tx_data[2]);
 	return spi_sync_transfer(adc->spi, &xfer, 1);
 }
 
@@ -225,14 +231,15 @@ static int ad485x_spi_reg_read(struct ad485x_dev *adc, unsigned int addr,
 		.bits_per_word = 8,
 	};
 
-	dev_dbg(&adc->spi->dev, "%s adc %p", __FUNCTION__, adc);
-
 	tx_data[0] = ((addr >> 8) & 0xFF) | BIT(7);
 	tx_data[1] = addr & 0xFF;
 	tx_data[2] = 0;
 
 	if (spi_sync_transfer(adc->spi, &xfer, 1) < 0)
 		return -EIO;
+
+	dev_dbg(&adc->spi->dev, "%s adc %p %02x %02x %02x",
+			__FUNCTION__, adc, tx_data[0], tx_data[1], rx_data[2]);
 
 	*val = rx_data[2];
 
@@ -456,6 +463,80 @@ static ssize_t ad485x_get_axi_crc_status(struct iio_dev *indio_dev,
 	return sprintf(buf, "%s\n", axi_reg ? "error" : "ok");
 }
 
+// AD4851_REG_TESTPAT_0
+static ssize_t ad485x_read_tp32(struct iio_dev *indio_dev,
+	uintptr_t private, struct iio_chan_spec const *chan, char *buf)
+{
+	struct axiadc_converter *conv = iio_device_get_drvdata(indio_dev);
+	struct ad485x_dev *adc = conv->phy;
+
+	unsigned int addrs[4] = {
+			AD4851_REG_TESTPAT_3(chan->channel),
+			AD4851_REG_TESTPAT_2(chan->channel),
+			AD4851_REG_TESTPAT_1(chan->channel),
+			AD4851_REG_TESTPAT_0(chan->channel)
+	};
+
+	unsigned tp32 = 0;
+	int ret;
+	unsigned int ireg;
+
+	for (ireg = 0; ireg < 4; ++ireg){
+		unsigned int reg;
+		ret = ad485x_spi_reg_read(adc, addrs[ireg], &reg);
+		if (ret < 0){
+			return ret;
+		}
+		tp32 = tp32<<8 | reg;
+	}
+
+	dev_info(&conv->spi->dev, "%s chan %d", __FUNCTION__, chan->channel);
+	ret = snprintf(buf, 128, "ad485x_read_tp32 chan %d %08x\n", chan->channel, tp32);
+	return ret;
+}
+ssize_t ad485x_write_tp32(struct iio_dev *indio_dev, uintptr_t private,
+	struct iio_chan_spec const *chan, const char *buf, size_t len)
+{
+	struct axiadc_converter *conv = iio_device_get_drvdata(indio_dev);
+	struct ad485x_dev *adc = conv->phy;
+
+	const unsigned int addrs[4] = {
+		AD4851_REG_TESTPAT_3(chan->channel),
+		AD4851_REG_TESTPAT_2(chan->channel),
+		AD4851_REG_TESTPAT_1(chan->channel),
+		AD4851_REG_TESTPAT_0(chan->channel)
+	};
+	unsigned tp32;
+	int ireg;
+
+	if (sscanf(buf, "%x", &tp32) != 1){
+		return -EINVAL;
+	}
+
+	dev_info(&conv->spi->dev, "%s chan %d tp32:%08x", __FUNCTION__, chan->channel, tp32);
+
+	for (ireg = 4; ireg-- > 0; tp32 >>= 8){
+		int ret = ad485x_spi_reg_write(adc, addrs[ireg], tp32&0xff);
+		if (ret < 0){
+			return ret;
+		}
+	}
+	return len;
+}
+
+
+ssize_t ad485x_do_post(struct iio_dev *indio_dev, uintptr_t private,
+	struct iio_chan_spec const *chan, const char *buf, size_t len)
+{
+	struct axiadc_converter *conv = iio_device_get_drvdata(indio_dev);
+	unsigned enable;
+
+	if (sscanf(buf, "%d", &enable) != 1 || enable != 1){
+		return -EINVAL;
+	}
+	conv->post_setup(indio_dev);
+	return len;
+}
 static const char * const seamless_high_dynamic_range[] = {
 	[0] = "disable",
 	[1] = "enable",
@@ -1204,7 +1285,20 @@ static int ad485x_read_label(struct iio_dev *indio_dev,
 		.name = "axi_crc_status",				\
 		.read = ad485x_get_axi_crc_status,			\
 		.shared = IIO_SHARED_BY_ALL,				\
+	},								\
+	{								\
+		.name = "test_pattern32",				\
+		.read = ad485x_read_tp32,				\
+		.write = ad485x_write_tp32,				\
+		.shared = IIO_SEPARATE,					\
+	},								\
+	{								\
+		.name = "do_post",					\
+		.read = 0,						\
+		.write = ad485x_do_post,				\
+		.shared = IIO_SHARED_BY_ALL,				\
 	}
+
 
 static struct iio_chan_spec_ext_info ad4858_ext_info[] = {
 	AD485x_EXT_INFO,
@@ -1401,7 +1495,7 @@ static const struct iio_info ad485x_info = {
 static int bc_cs_site = 0;
 static int first_time = 1;
 
-#define VER	"0.0.1"
+
 
 static int ad485x_probe(struct spi_device *spi)
 {
@@ -1523,9 +1617,6 @@ static int ad485x_probe(struct spi_device *spi)
 	device_create_file(&spi->dev, &dev_attr_device_status);
 	device_create_file(&spi->dev, &dev_attr_iio_id);
 
-	if (do_post){
-		conv->post_setup(indio_dev);
-	}
 	return 0;
 }
 
