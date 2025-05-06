@@ -1049,7 +1049,7 @@ static int ad485x_setup(struct ad485x_dev *adc)
 	}
 
 	ret = ad485x_spi_reg_write(adc, AD485x_REG_DEVICE_CTRL,
-				   AD485x_ECHO_CLOCK_MODE);
+				   AD485x_ECHO_CLOCK_MODE|AD485x_SDO_ENABLE);
 	if (ret < 0)
 		return ret;
 
