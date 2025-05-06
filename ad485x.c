@@ -559,9 +559,9 @@ ssize_t ad485x_write_tp32_en(struct iio_dev *indio_dev, uintptr_t private,
 	unsigned int reg;
 	int ret;
 
-	if (strncmp(buf, "ON", 2 == 0)){
+	if (strncmp(buf, "ON", 2) == 0)){
 		reg = TP_ON_MAGIC;
-	}else if (strncmp(buf, "OFF", 3 == 0)){
+	}else if (strncmp(buf, "OFF", 3) == 0)){
 		reg = TP_OFF_MAGIC;
 	}else if (sscanf(buf, "%x", &reg) != 1){
 		return -EINVAL;
