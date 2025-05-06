@@ -1350,7 +1350,7 @@ static int ad485x_read_label(struct iio_dev *indio_dev,
 		.name = "test_pattern_enable",				\
 		.read = ad485x_read_tp32_en,				\
 		.write = ad485x_write_tp32_en,				\
-		.shared = IIO_SEPARATE,					\
+		.shared = IIO_SHARED_BY_ALL,				\
 	},								\
 	{								\
 		.name = "do_post",					\
