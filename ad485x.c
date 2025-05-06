@@ -12,7 +12,7 @@
  * add REGS knob
  * add per channel TP knob.
  */
-#define VER	"0.1.0"
+#define VER	"0.2.0"
 
 
 #include <linux/bitops.h>
@@ -524,6 +524,59 @@ ssize_t ad485x_write_tp32(struct iio_dev *indio_dev, uintptr_t private,
 	}
 	return len;
 }
+
+//echo 0x26 0x04 > /sys/kernel/debug/iio/iio\:device1/direct_reg_access
+
+/* not really "magic", but value works of us because other than TP, it's all default 0 */
+#define TP_ON_MAGIC 	0x04
+#define TP_OFF_MAGIC 	0x00
+
+static ssize_t ad485x_read_tp32_en(struct iio_dev *indio_dev,
+	uintptr_t private, struct iio_chan_spec const *chan, char *buf)
+{
+	struct axiadc_converter *conv = iio_device_get_drvdata(indio_dev);
+	struct ad485x_dev *adc = conv->phy;
+
+	int ret;
+	unsigned int reg;
+	ret = ad485x_spi_reg_read(adc, AD485x_REG_PACKET, &reg);
+	if (ret < 0){
+		return ret;
+	}
+
+
+	dev_dbg(&conv->spi->dev, "%s chan %d %08x", __FUNCTION__, chan->channel, reg);
+	ret = snprintf(buf, 128, "%d\n", reg&TP_ON_MAGIC? 1: 0);
+	return ret;
+}
+ssize_t ad485x_write_tp32_en(struct iio_dev *indio_dev, uintptr_t private,
+	struct iio_chan_spec const *chan, const char *buf, size_t len)
+{
+	struct axiadc_converter *conv = iio_device_get_drvdata(indio_dev);
+	struct ad485x_dev *adc = conv->phy;
+
+
+	unsigned int reg;
+	int ret;
+
+	if (strncmp(buf, "ON", 2 == 0)){
+		reg = TP_ON_MAGIC;
+	}else if (strncmp(buf, "OFF", 3 == 0)){
+		reg = TP_OFF_MAGIC;
+	}else if (sscanf(buf, "%x", &reg) != 1){
+		return -EINVAL;
+	}
+
+	dev_dbg(&conv->spi->dev, "%s chan %d tp32:%08x", __FUNCTION__, chan->channel, reg);
+
+	ret = ad485x_spi_reg_write(adc, AD485x_REG_PACKET, reg);
+	if (ret < 0){
+		return ret;
+	}
+
+	return len;
+}
+
 
 
 ssize_t ad485x_do_post(struct iio_dev *indio_dev, uintptr_t private,
@@ -1294,12 +1347,17 @@ static int ad485x_read_label(struct iio_dev *indio_dev,
 		.shared = IIO_SEPARATE,					\
 	},								\
 	{								\
+		.name = "test_pattern_enable",				\
+		.read = ad485x_read_tp32_en,				\
+		.write = ad485x_write_tp32_en,				\
+		.shared = IIO_SEPARATE,					\
+	},								\
+	{								\
 		.name = "do_post",					\
 		.read = 0,						\
 		.write = ad485x_do_post,				\
 		.shared = IIO_SHARED_BY_ALL,				\
 	}
-
 
 static struct iio_chan_spec_ext_info ad4858_ext_info[] = {
 	AD485x_EXT_INFO,
