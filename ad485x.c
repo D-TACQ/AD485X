@@ -354,7 +354,7 @@ static int ad485x_get_packet_format(struct iio_dev *indio_dev,
 }
 
 static const char * const ad485x_softspan[] = {
-	[0] = "pgmwashere",
+	[0] = "BUSY",
 	[1] = "M2.5-2.5",
 	[2] = "0-5",
 	[3] = "M5-5",
